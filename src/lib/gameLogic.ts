@@ -27,17 +27,22 @@ const rankValues: Record<Rank, number> = {
   '7': 7,
 };
 
-// Generate a full deck for 3-2-5 (28 cards total: 7 cards × 4 suits, but each player gets 10)
+// Generate a full deck for 3-2-5 (30 cards total: 7 ranks × 4 suits + 2 sevens)
 export function createDeck(): Card[] {
   const suits: Suit[] = ['♠', '♥', '♦', '♣'];
-  const ranks: Rank[] = ['A', 'K', 'Q', 'J', '10', '9', '8', '7'];
+  const ranks: Rank[] = ['A', 'K', 'Q', 'J', '10', '9', '8'];
   const deck: Card[] = [];
 
+  // Add all cards except 7s first
   for (const suit of suits) {
     for (const rank of ranks) {
       deck.push({ suit, rank });
     }
   }
+
+  // Add only 7 of spades and 7 of hearts (remove other 7s to make 30 cards)
+  deck.push({ suit: '♠', rank: '7' });
+  deck.push({ suit: '♥', rank: '7' });
 
   return deck;
 }

@@ -20,6 +20,7 @@ export type Database = {
           id: string
           joined_at: string | null
           name: string
+          overachievement_score: number | null
           position: number
           room_id: string | null
           target_tricks: number | null
@@ -30,6 +31,7 @@ export type Database = {
           id?: string
           joined_at?: string | null
           name: string
+          overachievement_score?: number | null
           position: number
           room_id?: string | null
           target_tricks?: number | null
@@ -40,6 +42,7 @@ export type Database = {
           id?: string
           joined_at?: string | null
           name?: string
+          overachievement_score?: number | null
           position?: number
           room_id?: string | null
           target_tricks?: number | null
@@ -61,7 +64,10 @@ export type Database = {
           current_player_index: number | null
           current_round: number | null
           dealer_index: number | null
+          dealing_phase: string | null
+          first_trick_leader: number | null
           id: string
+          round_number: number | null
           status: string | null
           trump_suit: string | null
         }
@@ -70,7 +76,10 @@ export type Database = {
           current_player_index?: number | null
           current_round?: number | null
           dealer_index?: number | null
+          dealing_phase?: string | null
+          first_trick_leader?: number | null
           id?: string
+          round_number?: number | null
           status?: string | null
           trump_suit?: string | null
         }
@@ -79,7 +88,10 @@ export type Database = {
           current_player_index?: number | null
           current_round?: number | null
           dealer_index?: number | null
+          dealing_phase?: string | null
+          first_trick_leader?: number | null
           id?: string
+          round_number?: number | null
           status?: string | null
           trump_suit?: string | null
         }
