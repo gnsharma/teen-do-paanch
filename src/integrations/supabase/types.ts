@@ -63,6 +63,7 @@ export type Database = {
           created_at: string | null
           current_player_index: number | null
           current_round: number | null
+          current_trick: Json | null
           dealer_index: number | null
           dealing_phase: string | null
           first_trick_leader: number | null
@@ -75,6 +76,7 @@ export type Database = {
           created_at?: string | null
           current_player_index?: number | null
           current_round?: number | null
+          current_trick?: Json | null
           dealer_index?: number | null
           dealing_phase?: string | null
           first_trick_leader?: number | null
@@ -87,6 +89,7 @@ export type Database = {
           created_at?: string | null
           current_player_index?: number | null
           current_round?: number | null
+          current_trick?: Json | null
           dealer_index?: number | null
           dealing_phase?: string | null
           first_trick_leader?: number | null

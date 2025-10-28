@@ -52,7 +52,13 @@ const Game = () => {
       .eq('room_id', roomId)
       .order('position');
 
-    if (room) setGameState(room);
+    if (room) {
+      setGameState(room);
+      // Load current trick from database
+      if (Array.isArray(room.current_trick)) {
+        setCurrentTrick(room.current_trick as unknown as Array<{ position: number; card: Card }>);
+      }
+    }
     if (playersData) {
       setPlayers(playersData);
       const myPlayer = playersData.find(p => p.name === playerName);
@@ -173,11 +179,10 @@ const Game = () => {
     }
 
     const newTrick = [...currentTrick, { position: myPosition, card }];
-    setCurrentTrick(newTrick);
     const newHand = hand.filter(c => !(c.suit === card.suit && c.rank === card.rank));
     setHand(newHand);
 
-    // Update player hand
+    // Update player hand and current trick in database
     await supabase
       .from('players')
       .update({ hand: newHand as any })
@@ -196,7 +201,7 @@ const Game = () => {
         .eq('room_id', roomId)
         .eq('position', winnerPosition);
 
-      // Save trick to history
+      // Save trick to history and clear current trick
       await supabase.from('tricks').insert({
         room_id: roomId as string,
         round_number: gameState.round_number,
@@ -205,10 +210,20 @@ const Game = () => {
         winner_position: winnerPosition,
       });
 
+      // Update room with the completed trick and clear it after delay
+      await supabase
+        .from('rooms')
+        .update({ current_trick: newTrick as any })
+        .eq('id', roomId);
+
       setTricksPlayed(prev => prev + 1);
 
-      setTimeout(() => {
-        setCurrentTrick([]);
+      setTimeout(async () => {
+        // Clear current trick from database
+        await supabase
+          .from('rooms')
+          .update({ current_trick: [] as any })
+          .eq('id', roomId);
       }, 2000);
 
       // Check if round is over (all 10 tricks played)
@@ -222,10 +237,13 @@ const Game = () => {
           .eq('id', roomId);
       }
     } else {
-      // Next player
+      // Update current trick and next player
       await supabase
         .from('rooms')
-        .update({ current_player_index: (gameState.current_player_index + 1) % 3 })
+        .update({ 
+          current_trick: newTrick as any,
+          current_player_index: (gameState.current_player_index + 1) % 3 
+        })
         .eq('id', roomId);
     }
   };
