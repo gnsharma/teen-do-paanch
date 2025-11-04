@@ -157,8 +157,8 @@ const Game = () => {
         .eq('position', i);
     }
 
-    // Player after dealer starts first trick
-    const firstTrickLeader = (gameState.dealer_index + 1) % 3;
+    // Dealer starts first trick
+    const firstTrickLeader = gameState.dealer_index;
 
     await supabase
       .from('rooms')
@@ -296,11 +296,8 @@ const Game = () => {
       })
       .eq('id', roomId);
 
-    // Show redistribution UI if needed
-    const needsRedistribution = updatedPlayers.some(p => p.overachievement !== 0);
-    if (needsRedistribution) {
-      setShowRedistribution(true);
-    }
+    // Always show round end dialog
+    setShowRedistribution(true);
   };
 
   const handleStartNewRound = async () => {
@@ -461,6 +458,33 @@ const Game = () => {
               />
             </div>
           </>
+        )}
+
+        {gameState.status === 'redistribution' && !showRedistribution && (
+          <div className="text-center py-12">
+            <h2 className="text-2xl font-bold mb-4">Round {gameState.round_number - 1} Complete!</h2>
+            <div className="space-y-2 mb-8">
+              {players.map(p => {
+                const diff = p.tricks_won - p.target_tricks;
+                return (
+                  <div key={p.position} className="text-lg">
+                    {p.name}: {p.tricks_won}/{p.target_tricks} tricks 
+                    <span className={diff > 0 ? 'text-green-500 ml-2' : diff < 0 ? 'text-red-500 ml-2' : 'ml-2'}>
+                      ({diff > 0 ? '+' : ''}{diff})
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {isDealer && (
+              <Button onClick={handleStartNewRound} size="lg">
+                Start Round {gameState.round_number}
+              </Button>
+            )}
+            {!isDealer && (
+              <p className="text-muted-foreground">Waiting for dealer to start next round...</p>
+            )}
+          </div>
         )}
 
         {gameState.status === 'finished' && (
