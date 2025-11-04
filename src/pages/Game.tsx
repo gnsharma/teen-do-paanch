@@ -122,7 +122,8 @@ const Game = () => {
       .from('rooms')
       .update({ 
         dealing_phase: 'trump_selection',
-        status: 'dealing'
+        status: 'dealing',
+        remaining_cards: remainingCards as any
       })
       .eq('id', roomId);
   };
@@ -130,16 +131,20 @@ const Game = () => {
   const handleSelectTrump = async () => {
     if (!selectedTrump) return;
 
-    // Deal remaining 5 cards to each player
-    const deck = shuffle(createDeck());
-    const firstFiveHands: Card[][] = players.map(p => p.hand as unknown as Card[]);
+    // Get the stored remaining cards from the room
+    const remainingCards = (gameState.remaining_cards || []) as unknown as Card[];
     
-    // Get remaining cards (cards 15-29)
-    const remainingCards = deck.slice(15);
+    if (remainingCards.length !== 15) {
+      toast({ title: 'Error: Invalid remaining cards', variant: 'destructive' });
+      return;
+    }
+
+    // Deal remaining 5 cards to each player
+    const hands: Card[][] = players.map(p => [...(p.hand as unknown as Card[])]);
     
     for (let i = 0; i < 5; i++) {
       for (let player = 0; player < 3; player++) {
-        firstFiveHands[player].push(remainingCards[i * 3 + player]);
+        hands[player].push(remainingCards[i * 3 + player]);
       }
     }
 
@@ -147,7 +152,7 @@ const Game = () => {
     for (let i = 0; i < 3; i++) {
       await supabase
         .from('players')
-        .update({ hand: firstFiveHands[i] as any })
+        .update({ hand: hands[i] as any })
         .eq('room_id', roomId)
         .eq('position', i);
     }
@@ -162,7 +167,8 @@ const Game = () => {
         status: 'playing',
         dealing_phase: 'playing',
         current_player_index: firstTrickLeader,
-        first_trick_leader: firstTrickLeader
+        first_trick_leader: firstTrickLeader,
+        remaining_cards: null
       })
       .eq('id', roomId);
   };
@@ -301,6 +307,7 @@ const Game = () => {
     setShowRedistribution(false);
     setTricksPlayed(0);
     setCurrentTrick([]);
+    setSelectedTrump(null);
     
     // Deal first 5 cards for new round
     const deck = shuffle(createDeck());
@@ -311,6 +318,9 @@ const Game = () => {
         firstFiveHands[player].push(deck[i * 3 + player]);
       }
     }
+
+    // Store remaining cards
+    const remainingCards = deck.slice(15);
 
     for (let i = 0; i < 3; i++) {
       await supabase
@@ -329,7 +339,9 @@ const Game = () => {
       .update({ 
         dealing_phase: 'trump_selection',
         status: 'dealing',
-        trump_suit: null
+        trump_suit: null,
+        remaining_cards: remainingCards as any,
+        current_trick: [] as any
       })
       .eq('id', roomId);
   };
