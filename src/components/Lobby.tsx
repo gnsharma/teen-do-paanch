@@ -85,7 +85,7 @@ export const Lobby = ({ onCreateRoom, onJoinRoom }: LobbyProps) => {
               </Button>
               <Button
                 onClick={() => setIsJoining(false)}
-                variant="outline"
+                variant="secondary"
                 className="w-full"
               >
                 Back

@@ -57,11 +57,11 @@ export const GameBoard = ({ currentTrick, players, currentPlayerIndex, trump, my
                 isMe && 'bg-accent/20'
               )}
             >
-              <div className="font-bold text-lg">
+              <div className="font-bold text-lg text-secondary-foreground">
                 {player.name}
                 {isMe && ' (You)'}
               </div>
-              <div className="text-sm text-muted-foreground mt-1">
+              <div className="text-sm text-secondary-foreground/80 mt-1">
                 Target: {player.targetTricks} | Won: {player.tricksWon}
               </div>
               {isCurrentPlayer && (

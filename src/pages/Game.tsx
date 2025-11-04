@@ -8,6 +8,7 @@ import { Card, shuffle, createDeck, evaluateTrick, isValidMove, getTargetTricks,
 import { useToast } from '@/hooks/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Copy, Check } from 'lucide-react';
 
 const Game = () => {
   const { roomId } = useParams();
@@ -28,6 +29,7 @@ const Game = () => {
     toPlayer: number;
     phase: 'select' | 'return';
   } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!roomId) {
@@ -361,10 +363,25 @@ const Game = () => {
             </p>
           </div>
           <div className="flex gap-4 items-center">
-            <div className="text-sm text-muted-foreground">
-              Room: {roomId?.slice(0, 8)}...
+            <div className="flex items-center gap-2 bg-card px-4 py-2 rounded-lg border border-border">
+              <span className="text-sm font-mono text-card-foreground">
+                {roomId}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => {
+                  navigator.clipboard.writeText(roomId || '');
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                  toast({ title: 'Room ID copied to clipboard' });
+                }}
+              >
+                {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              </Button>
             </div>
-            <Button variant="outline" onClick={() => navigate('/')}>
+            <Button variant="secondary" onClick={() => navigate('/')}>
               Leave Game
             </Button>
           </div>
@@ -376,14 +393,16 @@ const Game = () => {
             <div 
               key={player.position}
               className={`p-4 rounded-lg border ${
-                player.position === myPosition ? 'bg-primary/10 border-primary' : 'bg-card'
+                player.position === myPosition ? 'bg-primary/10 border-primary' : 'bg-card border-border'
               }`}
             >
-              <div className="font-semibold">{player.name}</div>
-              <div className="text-sm text-muted-foreground">
+              <div className={`font-semibold ${player.position === myPosition ? 'text-foreground' : 'text-card-foreground'}`}>
+                {player.name}
+              </div>
+              <div className={`text-sm ${player.position === myPosition ? 'text-foreground/70' : 'text-card-foreground/70'}`}>
                 Target: {player.target_tricks} • Won: {player.tricks_won}
               </div>
-              <div className="text-sm font-medium mt-1">
+              <div className={`text-sm font-medium mt-1 ${player.position === myPosition ? 'text-foreground' : 'text-card-foreground'}`}>
                 Score: {player.overachievement_score || 0}
               </div>
             </div>
