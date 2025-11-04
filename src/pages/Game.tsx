@@ -368,7 +368,7 @@ const Game = () => {
                 {roomId}
               </span>
               <Button
-                variant="ghost"
+                variant="outline"
                 size="icon"
                 className="h-6 w-6"
                 onClick={() => {
