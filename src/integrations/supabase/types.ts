@@ -68,6 +68,7 @@ export type Database = {
           dealing_phase: string | null
           first_trick_leader: number | null
           id: string
+          remaining_cards: Json | null
           round_number: number | null
           status: string | null
           trump_suit: string | null
@@ -81,6 +82,7 @@ export type Database = {
           dealing_phase?: string | null
           first_trick_leader?: number | null
           id?: string
+          remaining_cards?: Json | null
           round_number?: number | null
           status?: string | null
           trump_suit?: string | null
@@ -94,6 +96,7 @@ export type Database = {
           dealing_phase?: string | null
           first_trick_leader?: number | null
           id?: string
+          remaining_cards?: Json | null
           round_number?: number | null
           status?: string | null
           trump_suit?: string | null
