@@ -4,7 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { PlayerHand } from '@/components/PlayerHand';
 import { GameBoard } from '@/components/GameBoard';
 import { Button } from '@/components/ui/button';
-import { Card, shuffle, createDeck, evaluateTrick, isValidMove, getTargetTricks, Suit } from '@/lib/gameLogic';
+import { Card, shuffle, createDeck, evaluateTrick, isValidMove, getTargetTricks, getFiveTrickPlayerPosition, Suit } from '@/lib/gameLogic';
 import { useToast } from '@/hooks/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -135,22 +135,25 @@ const Game = () => {
 
     // Get the stored remaining cards from the room
     const remainingCards = (gameState.remaining_cards || []) as unknown as Card[];
-    
+
     if (remainingCards.length !== 15) {
       toast({ title: 'Error: Invalid remaining cards', variant: 'destructive' });
       return;
     }
 
-    // Deal remaining 5 cards to each player
+    // Deal 3 cards to each player (first 9 of remaining 15)
     const hands: Card[][] = players.map(p => [...(p.hand as unknown as Card[])]);
-    
-    for (let i = 0; i < 5; i++) {
+
+    for (let i = 0; i < 3; i++) {
       for (let player = 0; player < 3; player++) {
         hands[player].push(remainingCards[i * 3 + player]);
       }
     }
 
-    // Update all players with full hands
+    // Store remaining 6 cards for next phase (2 cards per player)
+    const finalCards = remainingCards.slice(9);
+
+    // Update all players with 8 cards each
     for (let i = 0; i < 3; i++) {
       await supabase
         .from('players')
@@ -159,13 +162,51 @@ const Game = () => {
         .eq('position', i);
     }
 
-    // Dealer starts first trick
-    const firstTrickLeader = gameState.dealer_index;
-
+    // Transition to dealing_3 phase (3 cards dealt, 2 remaining)
     await supabase
       .from('rooms')
-      .update({ 
+      .update({
         trump_suit: selectedTrump,
+        dealing_phase: 'dealing_3',
+        remaining_cards: finalCards as any
+      })
+      .eq('id', roomId);
+  };
+
+  const handleDealFinalCards = async () => {
+    // Get the stored remaining cards from the room (should be 6 cards)
+    const remainingCards = (gameState.remaining_cards || []) as unknown as Card[];
+
+    if (remainingCards.length !== 6) {
+      toast({ title: 'Error: Invalid remaining cards', variant: 'destructive' });
+      return;
+    }
+
+    // Deal 2 cards to each player
+    const hands: Card[][] = players.map(p => [...(p.hand as unknown as Card[])]);
+
+    for (let i = 0; i < 2; i++) {
+      for (let player = 0; player < 3; player++) {
+        hands[player].push(remainingCards[i * 3 + player]);
+      }
+    }
+
+    // Update all players with full 10 cards each
+    for (let i = 0; i < 3; i++) {
+      await supabase
+        .from('players')
+        .update({ hand: hands[i] as any })
+        .eq('room_id', roomId)
+        .eq('position', i);
+    }
+
+    // 5-trick player starts first trick
+    const firstTrickLeader = getFiveTrickPlayerPosition(gameState.dealer_index);
+
+    // Transition to playing phase
+    await supabase
+      .from('rooms')
+      .update({
         status: 'playing',
         dealing_phase: 'playing',
         current_player_index: firstTrickLeader,
@@ -181,8 +222,9 @@ const Game = () => {
       return;
     }
 
-    if (!isValidMove(card, hand, currentTrick)) {
-      toast({ title: 'Invalid move - must follow suit', variant: 'destructive' });
+    const moveValidation = isValidMove(card, hand, currentTrick, gameState.trump_suit);
+    if (!moveValidation.valid) {
+      toast({ title: moveValidation.reason || 'Invalid move', variant: 'destructive' });
       return;
     }
 
@@ -285,7 +327,8 @@ const Game = () => {
         .eq('position', player.position);
     }
 
-    // Rotate dealer position
+    // Rotate dealer position: the 5-trick player from this round becomes the new dealer
+    // Since 5-trick player = (dealer + 1) % 3, new dealer = (dealer + 1) % 3
     const newDealerIndex = (gameState.dealer_index + 1) % 3;
 
     await supabase
@@ -307,24 +350,26 @@ const Game = () => {
     setTricksPlayed(0);
     setCurrentTrick([]);
     setSelectedTrump(null);
-    
+
     // Deal first 5 cards for new round
     const deck = shuffle(createDeck());
     const firstFiveHands: Card[][] = [[], [], []];
-    
+
     for (let i = 0; i < 5; i++) {
       for (let player = 0; player < 3; player++) {
         firstFiveHands[player].push(deck[i * 3 + player]);
       }
     }
 
-    // Store remaining cards
+    // Store remaining cards (15 cards: 3+2 per player to be dealt after trump selection)
     const remainingCards = deck.slice(15);
 
+    // gameState.dealer_index was updated in handleRoundEnd via realtime subscription
+    // The old 5-trick player is now the dealer with target of 2 tricks
     for (let i = 0; i < 3; i++) {
       await supabase
         .from('players')
-        .update({ 
+        .update({
           hand: firstFiveHands[i] as any,
           target_tricks: getTargetTricks(i, gameState.dealer_index),
           tricks_won: 0
@@ -350,6 +395,7 @@ const Game = () => {
   }
 
   const isDealer = myPosition === gameState.dealer_index;
+  const isFiveTrickPlayer = myPosition === getFiveTrickPlayerPosition(gameState.dealer_index);
   const myPlayerData = players.find(p => p.position === myPosition);
 
   return (
@@ -422,9 +468,9 @@ const Game = () => {
           </div>
         )}
 
-        {gameState.dealing_phase === 'trump_selection' && isDealer && (
+        {gameState.dealing_phase === 'trump_selection' && isFiveTrickPlayer && (
           <div className="text-center py-12 space-y-4">
-            <p className="text-lg">You are the dealer. Look at your first 5 cards and select trump suit:</p>
+            <p className="text-lg">You are the 5-trick player. Look at your first 5 cards and select trump suit:</p>
             <div className="mb-4">
               <PlayerHand cards={hand} canPlay={false} />
             </div>
@@ -447,12 +493,32 @@ const Game = () => {
           </div>
         )}
 
-        {gameState.dealing_phase === 'trump_selection' && !isDealer && (
+        {gameState.dealing_phase === 'trump_selection' && !isFiveTrickPlayer && (
           <div className="text-center py-12">
-            <p className="text-lg">Waiting for dealer to select trump suit...</p>
+            <p className="text-lg">Waiting for 5-trick player to select trump suit...</p>
             <div className="mt-4">
               <PlayerHand cards={hand} canPlay={false} />
             </div>
+          </div>
+        )}
+
+        {gameState.dealing_phase === 'dealing_3' && (
+          <div className="text-center py-12 space-y-4">
+            <div className="bg-secondary px-6 py-3 rounded-lg border-2 border-primary inline-block mb-4">
+              <div className="text-sm font-medium text-muted-foreground mb-1">Trump Suit</div>
+              <div className="text-4xl">{gameState.trump_suit}</div>
+            </div>
+            <p className="text-lg">3 more cards have been dealt. You now have 8 cards.</p>
+            <div className="mb-4">
+              <PlayerHand cards={hand} canPlay={false} />
+            </div>
+            {isDealer ? (
+              <Button onClick={handleDealFinalCards} size="lg">
+                Deal Final 2 Cards
+              </Button>
+            ) : (
+              <p className="text-muted-foreground">Waiting for dealer to deal final 2 cards...</p>
+            )}
           </div>
         )}
 

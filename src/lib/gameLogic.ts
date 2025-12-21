@@ -111,31 +111,49 @@ export function evaluateTrick(
 }
 
 // Check if a card play is valid
+// Returns { valid: boolean, reason?: string } for better error messages
 export function isValidMove(
   card: Card,
   hand: Card[],
-  currentTrick: Array<{ position: number; card: Card }>
-): boolean {
-  // If no cards played yet, any card is valid
-  if (currentTrick.length === 0) return true;
+  currentTrick: Array<{ position: number; card: Card }>,
+  trump: Suit | null
+): { valid: boolean; reason?: string } {
+  // Leading a trick
+  if (currentTrick.length === 0) {
+    // Cannot lead with trump unless that's all you have
+    if (trump && card.suit === trump) {
+      const hasNonTrump = hand.some(c => c.suit !== trump);
+      if (hasNonTrump) {
+        return { valid: false, reason: 'Cannot lead with trump unless you have no other cards' };
+      }
+    }
+    return { valid: true };
+  }
 
   const leadSuit = currentTrick[0].card.suit;
-  
+
   // If player has cards of lead suit, must follow suit
   const hasSuit = hand.some(c => c.suit === leadSuit);
   if (hasSuit) {
-    return card.suit === leadSuit;
+    if (card.suit !== leadSuit) {
+      return { valid: false, reason: 'Must follow suit' };
+    }
   }
 
-  // Otherwise, any card is valid
-  return true;
+  return { valid: true };
 }
 
 // Set target tricks based on dealer position
+// Dealer = 2 tricks, (dealer+1) = 5 tricks (chooses trump, leads first), (dealer+2) = 3 tricks
 export function getTargetTricks(position: number, dealerPosition: number): number {
-  if (position === dealerPosition) return 5;
-  if (position === (dealerPosition + 1) % 3) return 3;
-  return 2;
+  if (position === dealerPosition) return 2;                    // Dealer = 2 tricks
+  if (position === (dealerPosition + 1) % 3) return 5;          // Next = 5 tricks (trump chooser, first leader)
+  return 3;                                                      // Last = 3 tricks
+}
+
+// Get the position of the 5-trick player (who chooses trump and leads first trick)
+export function getFiveTrickPlayerPosition(dealerPosition: number): number {
+  return (dealerPosition + 1) % 3;
 }
 
 export function cardToString(card: Card): string {
