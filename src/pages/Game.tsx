@@ -232,7 +232,8 @@ const Game = () => {
           dealing_phase: 'playing',
           current_player_index: firstTrickLeader,
           first_trick_leader: firstTrickLeader,
-          remaining_cards: null
+          remaining_cards: null,
+          trump_led_at_start: null  // Reset for new round
         })
         .eq('id', roomId)
     ]);
@@ -250,7 +251,17 @@ const Game = () => {
       return;
     }
 
-    const moveValidation = isValidMove(card, hand, currentTrick, gameState.trump_suit);
+    // Calculate current trick index (0-9): 10 - hand.length gives us the current trick number
+    const trickIndex = 10 - hand.length;
+
+    const moveValidation = isValidMove(
+      card,
+      hand,
+      currentTrick,
+      gameState.trump_suit,
+      trickIndex,
+      gameState.trump_led_at_start
+    );
     if (!moveValidation.valid) {
       toast({ title: moveValidation.reason || 'Invalid move', variant: 'destructive' });
       return;
@@ -318,6 +329,18 @@ const Game = () => {
       }
     } else {
       // Trick not complete - parallelize hand update and room update
+      // Determine if we need to set trump_led_at_start (first card of first trick)
+      const isFirstCardOfFirstTrick = trickIndex === 0 && currentTrick.length === 0;
+      const roomUpdate: any = {
+        current_trick: newTrick as any,
+        current_player_index: (gameState.current_player_index + 1) % 3
+      };
+
+      // Set trump_led_at_start when the first card of the round is played
+      if (isFirstCardOfFirstTrick) {
+        roomUpdate.trump_led_at_start = card.suit === gameState.trump_suit;
+      }
+
       await Promise.all([
         supabase
           .from('players')
@@ -326,10 +349,7 @@ const Game = () => {
           .eq('position', myPosition),
         supabase
           .from('rooms')
-          .update({
-            current_trick: newTrick as any,
-            current_player_index: (gameState.current_player_index + 1) % 3
-          })
+          .update(roomUpdate)
           .eq('id', roomId)
       ]);
     }
@@ -436,7 +456,8 @@ const Game = () => {
           status: 'dealing',
           trump_suit: null,
           remaining_cards: remainingCards as any,
-          current_trick: [] as any
+          current_trick: [] as any,
+          trump_led_at_start: null  // Reset for new round
         })
         .eq('id', roomId)
     ]);

@@ -71,6 +71,7 @@ export type Database = {
           remaining_cards: Json | null
           round_number: number | null
           status: string | null
+          trump_led_at_start: boolean | null
           trump_suit: string | null
         }
         Insert: {
@@ -85,6 +86,7 @@ export type Database = {
           remaining_cards?: Json | null
           round_number?: number | null
           status?: string | null
+          trump_led_at_start?: boolean | null
           trump_suit?: string | null
         }
         Update: {
@@ -99,6 +101,7 @@ export type Database = {
           remaining_cards?: Json | null
           round_number?: number | null
           status?: string | null
+          trump_led_at_start?: boolean | null
           trump_suit?: string | null
         }
         Relationships: []

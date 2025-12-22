@@ -112,22 +112,43 @@ export function evaluateTrick(
 
 // Check if a card play is valid
 // Returns { valid: boolean, reason?: string } for better error messages
+// trickIndex: 0-9, which trick of the round (0 = first trick)
+// trumpLedAtStart: whether trump was led on the first trick of this round
 export function isValidMove(
   card: Card,
   hand: Card[],
   currentTrick: Array<{ position: number; card: Card }>,
-  trump: Suit | null
+  trump: Suit | null,
+  trickIndex: number = 0,
+  trumpLedAtStart: boolean | null = null
 ): { valid: boolean; reason?: string } {
   // Leading a trick
   if (currentTrick.length === 0) {
-    // Cannot lead with trump unless that's all you have
-    if (trump && card.suit === trump) {
-      const hasNonTrump = hand.some(c => c.suit !== trump);
-      if (hasNonTrump) {
-        return { valid: false, reason: 'Cannot lead with trump unless you have no other cards' };
-      }
+    // Case A: First trick of the round - trump allowed freely
+    if (trickIndex === 0) {
+      return { valid: true };
     }
-    return { valid: true };
+
+    // Case B: Subsequent tricks
+    if (trumpLedAtStart === true) {
+      // Trump was led on first trick - must lead trump if you have any
+      if (trump && card.suit !== trump) {
+        const hasTrump = hand.some(c => c.suit === trump);
+        if (hasTrump) {
+          return { valid: false, reason: 'Must lead trump (trump was led in first trick)' };
+        }
+      }
+      return { valid: true };
+    } else {
+      // Trump was NOT led on first trick - cannot lead trump unless no other cards
+      if (trump && card.suit === trump) {
+        const hasNonTrump = hand.some(c => c.suit !== trump);
+        if (hasNonTrump) {
+          return { valid: false, reason: 'Cannot lead with trump unless you have no other cards' };
+        }
+      }
+      return { valid: true };
+    }
   }
 
   const leadSuit = currentTrick[0].card.suit;
