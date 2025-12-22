@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Card, shuffle, createDeck, evaluateTrick, isValidMove, getTargetTricks, getFiveTrickPlayerPosition, Suit } from '@/lib/gameLogic';
 import { useToast } from '@/hooks/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Copy, Check } from 'lucide-react';
 
 const Game = () => {
@@ -22,13 +21,6 @@ const Game = () => {
   const [currentTrick, setCurrentTrick] = useState<Array<{ position: number; card: Card }>>([]);
   const [selectedTrump, setSelectedTrump] = useState<Suit | null>(null);
   const [tricksPlayed, setTricksPlayed] = useState(0);
-  const [showRedistribution, setShowRedistribution] = useState(false);
-  const [selectedCardForRedistribution, setSelectedCardForRedistribution] = useState<Card | null>(null);
-  const [redistributionState, setRedistributionState] = useState<{
-    fromPlayer: number;
-    toPlayer: number;
-    phase: 'select' | 'return';
-  } | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -340,13 +332,9 @@ const Game = () => {
         status: 'redistribution'
       })
       .eq('id', roomId);
-
-    // Always show round end dialog
-    setShowRedistribution(true);
   };
 
   const handleStartNewRound = async () => {
-    setShowRedistribution(false);
     setTricksPlayed(0);
     setCurrentTrick([]);
     setSelectedTrump(null);
@@ -545,7 +533,7 @@ const Game = () => {
           </>
         )}
 
-        {gameState.status === 'redistribution' && !showRedistribution && (
+        {gameState.status === 'redistribution' && (
           <div className="text-center py-12">
             <h2 className="text-2xl font-bold mb-4">Round {gameState.round_number - 1} Complete!</h2>
             <div className="space-y-2 mb-8">
@@ -553,7 +541,7 @@ const Game = () => {
                 const diff = p.tricks_won - p.target_tricks;
                 return (
                   <div key={p.position} className="text-lg">
-                    {p.name}: {p.tricks_won}/{p.target_tricks} tricks 
+                    {p.name}: {p.tricks_won}/{p.target_tricks} tricks
                     <span className={diff > 0 ? 'text-green-500 ml-2' : diff < 0 ? 'text-red-500 ml-2' : 'ml-2'}>
                       ({diff > 0 ? '+' : ''}{diff})
                     </span>
@@ -561,14 +549,12 @@ const Game = () => {
                 );
               })}
             </div>
-            {isDealer && (
-              <Button onClick={handleStartNewRound} size="lg">
-                Start Round {gameState.round_number}
-              </Button>
-            )}
-            {!isDealer && (
-              <p className="text-muted-foreground">Waiting for dealer to start next round...</p>
-            )}
+            <p className="text-sm text-muted-foreground mb-4">
+              Next round: {players.find(p => p.position === gameState.dealer_index)?.name} will be dealer (2 tricks)
+            </p>
+            <Button onClick={handleStartNewRound} size="lg">
+              Start Round {gameState.round_number}
+            </Button>
           </div>
         )}
 
@@ -590,35 +576,6 @@ const Game = () => {
             </Button>
           </div>
         )}
-
-        <Dialog open={showRedistribution} onOpenChange={setShowRedistribution}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Round Complete - Redistribution Phase</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Players who overachieved will take cards from players who underachieved.
-              </p>
-              <div className="space-y-2">
-                {players.map(p => {
-                  const diff = p.tricks_won - p.target_tricks;
-                  return (
-                    <div key={p.position} className="flex justify-between items-center">
-                      <span>{p.name}</span>
-                      <span className={diff > 0 ? 'text-green-500' : diff < 0 ? 'text-red-500' : ''}>
-                        {diff > 0 ? '+' : ''}{diff}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              <Button onClick={handleStartNewRound} className="w-full">
-                Start Next Round
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
       </div>
     </div>
   );
