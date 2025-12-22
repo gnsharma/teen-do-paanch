@@ -20,7 +20,7 @@ const Game = () => {
   const [players, setPlayers] = useState<any[]>([]);
   const [currentTrick, setCurrentTrick] = useState<Array<{ position: number; card: Card }>>([]);
   const [selectedTrump, setSelectedTrump] = useState<Suit | null>(null);
-  const [tricksPlayed, setTricksPlayed] = useState(0);
+  // Removed tricksPlayed local state - unreliable, use hand.length === 0 instead
   const [copied, setCopied] = useState(false);
 
   // Debounce ref for preventing cascading reloads
@@ -244,6 +244,12 @@ const Game = () => {
       return;
     }
 
+    // Prevent playing while previous trick is still displayed (3 cards = complete trick)
+    if (currentTrick.length >= 3) {
+      toast({ title: 'Wait for the trick to clear', variant: 'destructive' });
+      return;
+    }
+
     const moveValidation = isValidMove(card, hand, currentTrick, gameState.trump_suit);
     if (!moveValidation.valid) {
       toast({ title: moveValidation.reason || 'Invalid move', variant: 'destructive' });
@@ -273,11 +279,11 @@ const Game = () => {
           .update({ tricks_won: winner.tricks_won + 1 })
           .eq('room_id', roomId)
           .eq('position', winnerPosition),
-        // Save trick to history
+        // Save trick to history (trick_number = 10 - cards remaining after this play)
         supabase.from('tricks').insert({
           room_id: roomId as string,
           round_number: gameState.round_number,
-          trick_number: tricksPlayed + 1,
+          trick_number: 10 - newHand.length,
           cards_played: newTrick as any,
           winner_position: winnerPosition,
         }),
@@ -291,19 +297,24 @@ const Game = () => {
           .eq('id', roomId)
       ]);
 
-      setTricksPlayed(prev => prev + 1);
-
-      // Schedule trick clearing after display delay
-      setTimeout(async () => {
-        await supabase
-          .from('rooms')
-          .update({ current_trick: [] as any })
-          .eq('id', roomId);
-      }, 2000);
-
-      // Check if round is over (all 10 tricks played)
-      if (tricksPlayed + 1 >= 10) {
+      // Check if round is over (all cards played = hand is empty)
+      if (newHand.length === 0) {
+        // Wait a moment to show the final trick, then end round
+        setTimeout(async () => {
+          await supabase
+            .from('rooms')
+            .update({ current_trick: [] as any })
+            .eq('id', roomId);
+        }, 2000);
         await handleRoundEnd();
+      } else {
+        // Schedule trick clearing after display delay
+        setTimeout(async () => {
+          await supabase
+            .from('rooms')
+            .update({ current_trick: [] as any })
+            .eq('id', roomId);
+        }, 2000);
       }
     } else {
       // Trick not complete - parallelize hand update and room update
@@ -372,9 +383,23 @@ const Game = () => {
   };
 
   const handleStartNewRound = async () => {
-    setTricksPlayed(0);
     setCurrentTrick([]);
     setSelectedTrump(null);
+
+    // Refetch the latest room state to get the correct dealer_index
+    // (handleRoundEnd updated it, but subscription may not have fired yet)
+    const { data: latestRoom } = await supabase
+      .from('rooms')
+      .select('dealer_index')
+      .eq('id', roomId)
+      .single();
+
+    if (!latestRoom) {
+      toast({ title: 'Error fetching room state', variant: 'destructive' });
+      return;
+    }
+
+    const currentDealerIndex = latestRoom.dealer_index;
 
     // Deal first 5 cards for new round
     const deck = shuffle(createDeck());
@@ -390,8 +415,6 @@ const Game = () => {
     const remainingCards = deck.slice(15);
 
     // Parallelize all database updates
-    // gameState.dealer_index was updated in handleRoundEnd via realtime subscription
-    // The old 5-trick player is now the dealer with target of 2 tricks
     await Promise.all([
       // Update all 3 players in parallel
       ...Array.from({ length: 3 }, (_, i) =>
@@ -399,7 +422,7 @@ const Game = () => {
           .from('players')
           .update({
             hand: firstFiveHands[i] as any,
-            target_tricks: getTargetTricks(i, gameState.dealer_index),
+            target_tricks: getTargetTricks(i, currentDealerIndex),
             tricks_won: 0
           })
           .eq('room_id', roomId)
@@ -568,7 +591,7 @@ const Game = () => {
               <PlayerHand
                 cards={hand}
                 onCardClick={handlePlayCard}
-                canPlay={myPosition === gameState.current_player_index}
+                canPlay={myPosition === gameState.current_player_index && currentTrick.length < 3}
               />
             </div>
           </>
