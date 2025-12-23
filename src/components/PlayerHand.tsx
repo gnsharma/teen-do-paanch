@@ -7,9 +7,13 @@ interface PlayerHandProps {
   onCardClick?: (card: CardType) => void;
   canPlay?: boolean;
   className?: string;
+  highlightCards?: CardType[];
 }
 
-export const PlayerHand = ({ cards, onCardClick, canPlay, className }: PlayerHandProps) => {
+export const PlayerHand = ({ cards, onCardClick, canPlay, className, highlightCards }: PlayerHandProps) => {
+  const isHighlighted = (card: CardType) =>
+    highlightCards?.some(hc => hc.suit === card.suit && hc.rank === card.rank) ?? false;
+
   return (
     <div className={cn('flex flex-wrap gap-2 justify-center', className)}>
       {cards.map((card, index) => (
@@ -18,6 +22,7 @@ export const PlayerHand = ({ cards, onCardClick, canPlay, className }: PlayerHan
           card={card}
           onClick={() => onCardClick?.(card)}
           disabled={!canPlay}
+          highlighted={isHighlighted(card)}
         />
       ))}
     </div>

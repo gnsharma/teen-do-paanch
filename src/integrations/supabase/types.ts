@@ -60,6 +60,7 @@ export type Database = {
       }
       rooms: {
         Row: {
+          card_pull_state: Json | null
           created_at: string | null
           current_player_index: number | null
           current_round: number | null
@@ -68,6 +69,7 @@ export type Database = {
           dealing_phase: string | null
           first_trick_leader: number | null
           id: string
+          previous_round_results: Json | null
           remaining_cards: Json | null
           round_number: number | null
           status: string | null
@@ -75,6 +77,7 @@ export type Database = {
           trump_suit: string | null
         }
         Insert: {
+          card_pull_state?: Json | null
           created_at?: string | null
           current_player_index?: number | null
           current_round?: number | null
@@ -83,6 +86,7 @@ export type Database = {
           dealing_phase?: string | null
           first_trick_leader?: number | null
           id?: string
+          previous_round_results?: Json | null
           remaining_cards?: Json | null
           round_number?: number | null
           status?: string | null
@@ -90,6 +94,7 @@ export type Database = {
           trump_suit?: string | null
         }
         Update: {
+          card_pull_state?: Json | null
           created_at?: string | null
           current_player_index?: number | null
           current_round?: number | null
@@ -98,6 +103,7 @@ export type Database = {
           dealing_phase?: string | null
           first_trick_leader?: number | null
           id?: string
+          previous_round_results?: Json | null
           remaining_cards?: Json | null
           round_number?: number | null
           status?: string | null

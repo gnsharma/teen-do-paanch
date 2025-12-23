@@ -187,3 +187,141 @@ export function stringToCard(str: string): Card | null {
   const rank = str.slice(0, -1) as Rank;
   return { suit, rank };
 }
+
+// ========== Card Pull (Extra Trick Adjustment) Types and Functions ==========
+
+export interface PreviousRoundResult {
+  position: number;
+  tricksWon: number;
+  targetTricks: number;
+}
+
+export interface Puller {
+  position: number;
+  extraTricks: number;
+  pullsRemaining: number;
+}
+
+export interface UnderScorer {
+  position: number;
+}
+
+export type CardPullPhase = 'selecting_target' | 'selecting_card' | 'returning_card' | 'complete';
+
+export interface CardPullState {
+  pullers: Puller[];
+  underScorers: UnderScorer[];
+  currentPullerIndex: number;
+  phase: CardPullPhase;
+  selectedTarget: number | null;
+  pulledCard: Card | null;
+  pulledCardIndex: number | null;
+}
+
+/**
+ * Calculate which players are over-scorers and under-scorers based on previous round results.
+ * Over-scorers are sorted by extra tricks (descending), then clockwise from dealer for ties.
+ */
+export function calculatePullEligibility(
+  previousResults: PreviousRoundResult[],
+  dealerIndex: number
+): { overScorers: Puller[]; underScorers: UnderScorer[] } {
+  const overScorers: Puller[] = [];
+  const underScorers: UnderScorer[] = [];
+
+  for (const result of previousResults) {
+    const diff = result.tricksWon - result.targetTricks;
+    if (diff > 0) {
+      overScorers.push({
+        position: result.position,
+        extraTricks: diff,
+        pullsRemaining: diff
+      });
+    } else if (diff < 0) {
+      underScorers.push({ position: result.position });
+    }
+  }
+
+  // Sort over-scorers: descending by extra tricks, then clockwise from dealer for ties
+  overScorers.sort((a, b) => {
+    if (b.extraTricks !== a.extraTricks) {
+      return b.extraTricks - a.extraTricks;
+    }
+    // Clockwise from dealer: position closer to (dealer + 1) % 3 goes first
+    const aDistance = (a.position - dealerIndex + 3) % 3;
+    const bDistance = (b.position - dealerIndex + 3) % 3;
+    return aDistance - bDistance;
+  });
+
+  return { overScorers, underScorers };
+}
+
+/**
+ * Initialize the card pull state for the beginning of the card pull phase.
+ */
+export function initializeCardPullState(
+  overScorers: Puller[],
+  underScorers: UnderScorer[]
+): CardPullState {
+  return {
+    pullers: overScorers,
+    underScorers,
+    currentPullerIndex: 0,
+    phase: 'selecting_target',
+    selectedTarget: null,
+    pulledCard: null,
+    pulledCardIndex: null
+  };
+}
+
+/**
+ * Validate if a card can be returned according to the card pull rules.
+ *
+ * Rules:
+ * - Option A: Same card as pulled (always valid)
+ * - Option B: Same suit as pulled card (valid)
+ * - Option C: Different suit, only if returning player keeps at least 2 cards of that suit
+ *
+ * @param returnCard The card the over-scorer wants to return
+ * @param pulledCard The card that was pulled from the under-scorer
+ * @param currentHand The over-scorer's current hand (including the pulled card)
+ */
+export function canReturnCard(
+  returnCard: Card,
+  pulledCard: Card,
+  currentHand: Card[]
+): { valid: boolean; reason?: string } {
+  // Option A: Same card as pulled - always valid
+  if (returnCard.suit === pulledCard.suit && returnCard.rank === pulledCard.rank) {
+    return { valid: true };
+  }
+
+  // Option B: Same suit as pulled card - valid
+  if (returnCard.suit === pulledCard.suit) {
+    return { valid: true };
+  }
+
+  // Option C: Different suit - must keep at least 2 cards of the return suit after swap
+  const cardsOfReturnSuit = currentHand.filter(c => c.suit === returnCard.suit);
+
+  // After returning, they keep (cardsOfReturnSuit.length - 1) of this suit
+  // Must be >= 2, so need at least 3 before returning
+  if (cardsOfReturnSuit.length >= 3) {
+    return { valid: true };
+  }
+
+  return {
+    valid: false,
+    reason: `Cannot return ${returnCard.rank}${returnCard.suit}: must keep at least 2 cards of ${returnCard.suit}`
+  };
+}
+
+/**
+ * Get the list of valid return cards from a hand.
+ */
+export function getValidReturnCards(
+  pulledCard: Card,
+  currentHand: Card[]
+): Card[] {
+  return currentHand.filter(card => canReturnCard(card, pulledCard, currentHand).valid);
+}

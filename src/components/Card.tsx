@@ -7,11 +7,12 @@ interface CardProps {
   disabled?: boolean;
   className?: string;
   isPlayed?: boolean;
+  highlighted?: boolean;
 }
 
-export const Card = ({ card, onClick, disabled, className, isPlayed }: CardProps) => {
+export const Card = ({ card, onClick, disabled, className, isPlayed, highlighted }: CardProps) => {
   const isRed = card.suit === '♥' || card.suit === '♦';
-  
+
   return (
     <div
       onClick={disabled ? undefined : onClick}
@@ -23,6 +24,7 @@ export const Card = ({ card, onClick, disabled, className, isPlayed }: CardProps
         disabled && 'opacity-50 cursor-not-allowed',
         isPlayed && 'animate-card-play',
         !isPlayed && 'animate-card-deal',
+        highlighted && 'ring-2 ring-amber-500 ring-offset-2 ring-offset-background',
         className
       )}
     >

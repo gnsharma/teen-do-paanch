@@ -4,7 +4,10 @@ import { supabase } from '@/integrations/supabase/client';
 import { PlayerHand } from '@/components/PlayerHand';
 import { GameBoard } from '@/components/GameBoard';
 import { Button } from '@/components/ui/button';
-import { Card, shuffle, createDeck, evaluateTrick, isValidMove, getTargetTricks, getFiveTrickPlayerPosition, Suit } from '@/lib/gameLogic';
+import {
+  Card, shuffle, createDeck, evaluateTrick, isValidMove, getTargetTricks, getFiveTrickPlayerPosition, Suit,
+  PreviousRoundResult, CardPullState, calculatePullEligibility, initializeCardPullState, canReturnCard, getValidReturnCards
+} from '@/lib/gameLogic';
 import { useToast } from '@/hooks/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Copy, Check } from 'lucide-react';
@@ -214,6 +217,25 @@ const Game = () => {
     // 5-trick player starts first trick
     const firstTrickLeader = getFiveTrickPlayerPosition(gameState.dealer_index);
 
+    // Check if card pull phase applies (round > 1 and has previous results)
+    const previousResults = gameState.previous_round_results as PreviousRoundResult[] | null;
+    const shouldDoCardPull = gameState.round_number > 1 && previousResults && previousResults.length > 0;
+
+    let cardPullState: CardPullState | null = null;
+    let nextPhase = 'playing';
+    let nextStatus = 'playing';
+
+    if (shouldDoCardPull) {
+      const { overScorers, underScorers } = calculatePullEligibility(previousResults, gameState.dealer_index);
+
+      // Only do card pull if there are both over-scorers AND under-scorers
+      if (overScorers.length > 0 && underScorers.length > 0) {
+        cardPullState = initializeCardPullState(overScorers, underScorers);
+        nextPhase = 'card_pull';
+        nextStatus = 'dealing'; // Stay in dealing status during card pull
+      }
+    }
+
     // Parallelize all database updates
     await Promise.all([
       // Update all 3 players with full 10 cards each
@@ -224,16 +246,17 @@ const Game = () => {
           .eq('room_id', roomId)
           .eq('position', i)
       ),
-      // Transition to playing phase
+      // Transition to next phase (card_pull or playing)
       supabase
         .from('rooms')
         .update({
-          status: 'playing',
-          dealing_phase: 'playing',
+          status: nextStatus,
+          dealing_phase: nextPhase,
           current_player_index: firstTrickLeader,
           first_trick_leader: firstTrickLeader,
           remaining_cards: null,
-          trump_led_at_start: null  // Reset for new round
+          trump_led_at_start: null,  // Reset for new round
+          card_pull_state: cardPullState as any
         })
         .eq('id', roomId)
     ]);
@@ -365,7 +388,7 @@ const Game = () => {
 
     // Check for winner (overachievement score >= 5)
     const winner = updatedPlayers.find(p => p.overachievement_score >= 5);
-    
+
     if (winner) {
       toast({ title: `${winner.name} wins the game!`, description: `Overachievement score: ${winner.overachievement_score}` });
       await supabase
@@ -374,6 +397,13 @@ const Game = () => {
         .eq('id', roomId);
       return;
     }
+
+    // Save previous round results for card pull calculation
+    const previousRoundResults: PreviousRoundResult[] = players.map(p => ({
+      position: p.position,
+      tricksWon: p.tricks_won,
+      targetTricks: p.target_tricks
+    }));
 
     // Rotate dealer position: the 5-trick player from this round becomes the new dealer
     // Since 5-trick player = (dealer + 1) % 3, new dealer = (dealer + 1) % 3
@@ -396,10 +426,212 @@ const Game = () => {
           dealer_index: newDealerIndex,
           round_number: gameState.round_number + 1,
           dealing_phase: 'redistribution',
-          status: 'redistribution'
+          status: 'redistribution',
+          previous_round_results: previousRoundResults as any
         })
         .eq('id', roomId)
     ]);
+  };
+
+  // ========== Card Pull Handlers ==========
+
+  const handleSelectPullTarget = async (targetPosition: number) => {
+    const cardPullState = gameState.card_pull_state as CardPullState | null;
+    if (!cardPullState || cardPullState.phase !== 'selecting_target') {
+      toast({ title: 'Invalid action', variant: 'destructive' });
+      return;
+    }
+
+    // Verify this is the current puller
+    const currentPuller = cardPullState.pullers[cardPullState.currentPullerIndex];
+    if (myPosition !== currentPuller.position) {
+      toast({ title: 'Not your turn to pull', variant: 'destructive' });
+      return;
+    }
+
+    // Verify target is an under-scorer
+    const isValidTarget = cardPullState.underScorers.some(u => u.position === targetPosition);
+    if (!isValidTarget) {
+      toast({ title: 'Invalid target', variant: 'destructive' });
+      return;
+    }
+
+    // Update state to selecting_card phase
+    const newState: CardPullState = {
+      ...cardPullState,
+      phase: 'selecting_card',
+      selectedTarget: targetPosition
+    };
+
+    await supabase
+      .from('rooms')
+      .update({ card_pull_state: newState as any })
+      .eq('id', roomId);
+  };
+
+  const handleSelectCardPosition = async (cardIndex: number) => {
+    const cardPullState = gameState.card_pull_state as CardPullState | null;
+    if (!cardPullState || cardPullState.phase !== 'selecting_card' || cardPullState.selectedTarget === null) {
+      toast({ title: 'Invalid action', variant: 'destructive' });
+      return;
+    }
+
+    // Verify this is the current puller
+    const currentPuller = cardPullState.pullers[cardPullState.currentPullerIndex];
+    if (myPosition !== currentPuller.position) {
+      toast({ title: 'Not your turn to pull', variant: 'destructive' });
+      return;
+    }
+
+    // Get target player's hand
+    const targetPlayer = players.find(p => p.position === cardPullState.selectedTarget);
+    if (!targetPlayer) {
+      toast({ title: 'Target player not found', variant: 'destructive' });
+      return;
+    }
+
+    const targetHand = targetPlayer.hand as unknown as Card[];
+    if (cardIndex < 0 || cardIndex >= targetHand.length) {
+      toast({ title: 'Invalid card position', variant: 'destructive' });
+      return;
+    }
+
+    // Get the pulled card
+    const pulledCard = targetHand[cardIndex];
+
+    // Update state to returning_card phase with the revealed card
+    const newState: CardPullState = {
+      ...cardPullState,
+      phase: 'returning_card',
+      pulledCard,
+      pulledCardIndex: cardIndex
+    };
+
+    await supabase
+      .from('rooms')
+      .update({ card_pull_state: newState as any })
+      .eq('id', roomId);
+  };
+
+  const handleReturnCard = async (returnCard: Card) => {
+    const cardPullState = gameState.card_pull_state as CardPullState | null;
+    if (!cardPullState || cardPullState.phase !== 'returning_card' || !cardPullState.pulledCard || cardPullState.selectedTarget === null) {
+      toast({ title: 'Invalid action', variant: 'destructive' });
+      return;
+    }
+
+    // Verify this is the current puller
+    const currentPuller = cardPullState.pullers[cardPullState.currentPullerIndex];
+    if (myPosition !== currentPuller.position) {
+      toast({ title: 'Not your turn to pull', variant: 'destructive' });
+      return;
+    }
+
+    // Validate return card
+    const validation = canReturnCard(returnCard, cardPullState.pulledCard, hand);
+    if (!validation.valid) {
+      toast({ title: validation.reason || 'Invalid return card', variant: 'destructive' });
+      return;
+    }
+
+    const targetPlayer = players.find(p => p.position === cardPullState.selectedTarget);
+    if (!targetPlayer) {
+      toast({ title: 'Target player not found', variant: 'destructive' });
+      return;
+    }
+
+    // Execute the swap
+    // Puller's new hand: remove returnCard, add pulledCard
+    const pullerNewHand = hand.filter(c => !(c.suit === returnCard.suit && c.rank === returnCard.rank));
+    pullerNewHand.push(cardPullState.pulledCard);
+
+    // Target's new hand: remove pulledCard, add returnCard
+    const targetHand = targetPlayer.hand as unknown as Card[];
+    const targetNewHand = targetHand.filter(c => !(c.suit === cardPullState.pulledCard!.suit && c.rank === cardPullState.pulledCard!.rank));
+    targetNewHand.push(returnCard);
+
+    // Update local state immediately for responsiveness
+    setHand(pullerNewHand);
+
+    // Update pulls remaining
+    const updatedPullers = [...cardPullState.pullers];
+    updatedPullers[cardPullState.currentPullerIndex] = {
+      ...currentPuller,
+      pullsRemaining: currentPuller.pullsRemaining - 1
+    };
+
+    // Determine next state
+    let newState: CardPullState | null;
+
+    if (updatedPullers[cardPullState.currentPullerIndex].pullsRemaining > 0) {
+      // Same puller has more pulls - reset to selecting_target
+      newState = {
+        ...cardPullState,
+        pullers: updatedPullers,
+        phase: 'selecting_target',
+        selectedTarget: null,
+        pulledCard: null,
+        pulledCardIndex: null
+      };
+    } else {
+      // Move to next puller
+      const nextPullerIndex = cardPullState.currentPullerIndex + 1;
+      if (nextPullerIndex < updatedPullers.length) {
+        // More pullers remain
+        newState = {
+          ...cardPullState,
+          pullers: updatedPullers,
+          currentPullerIndex: nextPullerIndex,
+          phase: 'selecting_target',
+          selectedTarget: null,
+          pulledCard: null,
+          pulledCardIndex: null
+        };
+      } else {
+        // All pulls complete
+        newState = null;
+      }
+    }
+
+    // Prepare database updates
+    const dbUpdates: Promise<any>[] = [
+      // Update puller's hand
+      supabase
+        .from('players')
+        .update({ hand: pullerNewHand as any })
+        .eq('room_id', roomId)
+        .eq('position', myPosition),
+      // Update target's hand
+      supabase
+        .from('players')
+        .update({ hand: targetNewHand as any })
+        .eq('room_id', roomId)
+        .eq('position', cardPullState.selectedTarget)
+    ];
+
+    if (newState) {
+      // Continue card pull phase
+      dbUpdates.push(
+        supabase
+          .from('rooms')
+          .update({ card_pull_state: newState as any })
+          .eq('id', roomId)
+      );
+    } else {
+      // Transition to playing phase
+      dbUpdates.push(
+        supabase
+          .from('rooms')
+          .update({
+            status: 'playing',
+            dealing_phase: 'playing',
+            card_pull_state: null
+          })
+          .eq('id', roomId)
+      );
+    }
+
+    await Promise.all(dbUpdates);
   };
 
   const handleStartNewRound = async () => {
@@ -594,6 +826,149 @@ const Game = () => {
             )}
           </div>
         )}
+
+        {gameState.dealing_phase === 'card_pull' && gameState.card_pull_state && (() => {
+          const cardPullState = gameState.card_pull_state as CardPullState;
+          const currentPuller = cardPullState.pullers[cardPullState.currentPullerIndex];
+          const isMyTurn = myPosition === currentPuller?.position;
+          const pullerName = players.find(p => p.position === currentPuller?.position)?.name || 'Unknown';
+          const targetPlayer = players.find(p => p.position === cardPullState.selectedTarget);
+          const validReturnCards = cardPullState.pulledCard ? getValidReturnCards(cardPullState.pulledCard, hand) : [];
+
+          return (
+            <div className="text-center py-8 space-y-6">
+              {/* Trump display */}
+              <div className="bg-secondary px-6 py-3 rounded-lg border-2 border-primary inline-block">
+                <div className="text-sm font-medium text-muted-foreground mb-1">Trump Suit</div>
+                <div className="text-4xl">{gameState.trump_suit}</div>
+              </div>
+
+              {/* Card Pull Header */}
+              <div className="bg-amber-500/20 border border-amber-500 rounded-lg px-6 py-4 max-w-2xl mx-auto">
+                <h2 className="text-xl font-bold text-amber-600 mb-2">Card Pull Phase</h2>
+                <p className="text-sm text-muted-foreground">
+                  {pullerName} has {currentPuller?.pullsRemaining} pull{currentPuller?.pullsRemaining !== 1 ? 's' : ''} remaining
+                  (won {currentPuller?.extraTricks} extra trick{currentPuller?.extraTricks !== 1 ? 's' : ''} last round)
+                </p>
+              </div>
+
+              {/* Phase: Selecting Target */}
+              {cardPullState.phase === 'selecting_target' && (
+                <div className="space-y-4">
+                  {isMyTurn ? (
+                    <>
+                      <p className="text-lg font-medium">Select a player to pull a card from:</p>
+                      <div className="flex gap-4 justify-center">
+                        {cardPullState.underScorers.map(underScorer => {
+                          const player = players.find(p => p.position === underScorer.position);
+                          return (
+                            <Button
+                              key={underScorer.position}
+                              onClick={() => handleSelectPullTarget(underScorer.position)}
+                              variant="outline"
+                              className="px-6 py-8 flex flex-col gap-2"
+                            >
+                              <span className="font-semibold">{player?.name}</span>
+                              <span className="text-sm text-muted-foreground">Position {underScorer.position + 1}</span>
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-lg text-muted-foreground">{pullerName} is selecting a player to pull from...</p>
+                  )}
+                </div>
+              )}
+
+              {/* Phase: Selecting Card */}
+              {cardPullState.phase === 'selecting_card' && (
+                <div className="space-y-4">
+                  {isMyTurn ? (
+                    <>
+                      <p className="text-lg font-medium">Select a card from {targetPlayer?.name}'s hand:</p>
+                      <div className="flex gap-2 justify-center flex-wrap">
+                        {Array.from({ length: 10 }).map((_, index) => (
+                          <button
+                            key={index}
+                            onClick={() => handleSelectCardPosition(index)}
+                            className="w-16 h-24 bg-gradient-to-br from-blue-800 to-blue-950 rounded-lg border-2 border-blue-600 hover:border-amber-500 hover:scale-105 transition-all flex items-center justify-center shadow-lg cursor-pointer"
+                          >
+                            <span className="text-xs text-blue-300 font-mono">{index + 1}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-lg text-muted-foreground">
+                        {pullerName} is selecting a card from {targetPlayer?.name}'s hand...
+                      </p>
+                      {myPosition === cardPullState.selectedTarget && (
+                        <div className="mt-4">
+                          <p className="text-sm text-amber-600 mb-2">Your cards (one will be pulled):</p>
+                          <PlayerHand cards={hand} canPlay={false} />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Phase: Returning Card */}
+              {cardPullState.phase === 'returning_card' && cardPullState.pulledCard && (
+                <div className="space-y-4">
+                  {/* Show the pulled card to everyone */}
+                  <div className="bg-card border rounded-lg p-4 max-w-md mx-auto">
+                    <p className="text-sm text-muted-foreground mb-2">Card pulled from {targetPlayer?.name}:</p>
+                    <div className="flex justify-center">
+                      <div className={`w-20 h-28 rounded-lg border-2 flex items-center justify-center text-3xl font-bold shadow-lg ${
+                        cardPullState.pulledCard.suit === '♥' || cardPullState.pulledCard.suit === '♦'
+                          ? 'bg-white text-red-600 border-red-300'
+                          : 'bg-white text-gray-900 border-gray-300'
+                      }`}>
+                        {cardPullState.pulledCard.rank}{cardPullState.pulledCard.suit}
+                      </div>
+                    </div>
+                  </div>
+
+                  {isMyTurn ? (
+                    <>
+                      <p className="text-lg font-medium">Select a card to return:</p>
+                      <p className="text-sm text-muted-foreground">
+                        You can return: the same card, a card of the same suit, or a different suit if you keep at least 2 of that suit
+                      </p>
+                      <div className="mt-4">
+                        <PlayerHand
+                          cards={hand}
+                          canPlay={true}
+                          onCardClick={handleReturnCard}
+                          highlightCards={validReturnCards}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-lg text-muted-foreground">{pullerName} is selecting a card to return...</p>
+                  )}
+                </div>
+              )}
+
+              {/* Always show your hand at the bottom if not already shown */}
+              {(cardPullState.phase !== 'returning_card' || !isMyTurn) && cardPullState.phase !== 'selecting_card' && (
+                <div className="mt-8">
+                  <h3 className="text-lg font-semibold mb-2">Your Hand</h3>
+                  <PlayerHand cards={hand} canPlay={false} />
+                </div>
+              )}
+              {cardPullState.phase === 'selecting_card' && myPosition !== cardPullState.selectedTarget && (
+                <div className="mt-8">
+                  <h3 className="text-lg font-semibold mb-2">Your Hand</h3>
+                  <PlayerHand cards={hand} canPlay={false} />
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {gameState.status === 'playing' && (
           <>
