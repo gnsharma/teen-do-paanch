@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { PlayerHand } from '@/components/PlayerHand';
@@ -25,9 +25,6 @@ const Game = () => {
   const [selectedTrump, setSelectedTrump] = useState<Suit | null>(null);
   // Removed tricksPlayed local state - unreliable, use hand.length === 0 instead
   const [copied, setCopied] = useState(false);
-
-  // Debounce ref for preventing cascading reloads
-  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const loadGameState = useCallback(async () => {
     const { data: room } = await supabase
@@ -61,16 +58,6 @@ const Game = () => {
     }
   }, [roomId, playerName]);
 
-  // Debounced version to prevent cascading reloads from multiple subscription triggers
-  const loadGameStateDebounced = useCallback(() => {
-    if (debounceTimeoutRef.current) {
-      clearTimeout(debounceTimeoutRef.current);
-    }
-    debounceTimeoutRef.current = setTimeout(() => {
-      loadGameState();
-    }, 50);
-  }, [loadGameState]);
-
   useEffect(() => {
     if (!roomId) {
       navigate('/');
@@ -78,35 +65,33 @@ const Game = () => {
     }
 
     loadGameState();
-
-    // Cleanup debounce on unmount
-    return () => {
-      if (debounceTimeoutRef.current) {
-        clearTimeout(debounceTimeoutRef.current);
-      }
-    };
   }, [roomId, loadGameState, navigate]);
 
-  // Subscribe to realtime changes with debounced handler
+  // Subscribe to realtime changes
   useEffect(() => {
     if (!roomId) return;
 
     const channel = supabase
       .channel(`room:${roomId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, () => {
-        loadGameStateDebounced();
+        loadGameState();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${roomId}` }, () => {
-        loadGameStateDebounced();
+        loadGameState();
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [roomId, loadGameStateDebounced]);
+  }, [roomId, loadGameState]);
 
   const handleStartGame = async () => {
+    // Guard against double-starting
+    if (gameState.status !== 'waiting') {
+      return;
+    }
+
     if (players.length !== 3) {
       toast({ title: 'Need 3 players to start', variant: 'destructive' });
       return;
@@ -125,34 +110,37 @@ const Game = () => {
     // Store remaining cards in room for second dealing phase
     const remainingCards = deck.slice(15);
 
-    // Parallelize all database updates
-    await Promise.all([
-      // Update all 3 players in parallel
-      ...Array.from({ length: 3 }, (_, i) =>
-        supabase
-          .from('players')
-          .update({
-            hand: firstFiveHands[i] as any,
-            target_tricks: getTargetTricks(i, gameState.dealer_index),
-            tricks_won: 0
-          })
-          .eq('room_id', roomId)
-          .eq('position', i)
-      ),
-      // Update room state
-      supabase
-        .from('rooms')
+    // Update players sequentially
+    for (let i = 0; i < 3; i++) {
+      await supabase
+        .from('players')
         .update({
-          dealing_phase: 'trump_selection',
-          status: 'dealing',
-          remaining_cards: remainingCards as any
+          hand: firstFiveHands[i] as any,
+          target_tricks: getTargetTricks(i, gameState.dealer_index),
+          tricks_won: 0
         })
-        .eq('id', roomId)
-    ]);
+        .eq('room_id', roomId)
+        .eq('position', i);
+    }
+
+    // Update room state
+    await supabase
+      .from('rooms')
+      .update({
+        dealing_phase: 'trump_selection',
+        status: 'dealing',
+        remaining_cards: remainingCards as any
+      })
+      .eq('id', roomId);
   };
 
   const handleSelectTrump = async () => {
     if (!selectedTrump) return;
+
+    // Guard against double-dealing (race condition)
+    if (gameState.dealing_phase !== 'trump_selection') {
+      return;
+    }
 
     // Get the stored remaining cards from the room
     const remainingCards = (gameState.remaining_cards || []) as unknown as Card[];
@@ -174,29 +162,32 @@ const Game = () => {
     // Store remaining 6 cards for next phase (2 cards per player)
     const finalCards = remainingCards.slice(9);
 
-    // Parallelize all database updates
-    await Promise.all([
-      // Update all 3 players with 8 cards each
-      ...Array.from({ length: 3 }, (_, i) =>
-        supabase
-          .from('players')
-          .update({ hand: hands[i] as any })
-          .eq('room_id', roomId)
-          .eq('position', i)
-      ),
-      // Transition to dealing_3 phase
-      supabase
-        .from('rooms')
-        .update({
-          trump_suit: selectedTrump,
-          dealing_phase: 'dealing_3',
-          remaining_cards: finalCards as any
-        })
-        .eq('id', roomId)
-    ]);
+    // Update players sequentially
+    for (let i = 0; i < 3; i++) {
+      await supabase
+        .from('players')
+        .update({ hand: hands[i] as any })
+        .eq('room_id', roomId)
+        .eq('position', i);
+    }
+
+    // Transition to dealing_3 phase
+    await supabase
+      .from('rooms')
+      .update({
+        trump_suit: selectedTrump,
+        dealing_phase: 'dealing_3',
+        remaining_cards: finalCards as any
+      })
+      .eq('id', roomId);
   };
 
   const handleDealFinalCards = async () => {
+    // Guard against double-dealing (race condition when multiple clicks)
+    if (gameState.dealing_phase !== 'dealing_3') {
+      return;
+    }
+
     // Get the stored remaining cards from the room (should be 6 cards)
     const remainingCards = (gameState.remaining_cards || []) as unknown as Card[];
 
@@ -236,30 +227,28 @@ const Game = () => {
       }
     }
 
-    // Parallelize all database updates
-    await Promise.all([
-      // Update all 3 players with full 10 cards each
-      ...Array.from({ length: 3 }, (_, i) =>
-        supabase
-          .from('players')
-          .update({ hand: hands[i] as any })
-          .eq('room_id', roomId)
-          .eq('position', i)
-      ),
-      // Transition to next phase (card_pull or playing)
-      supabase
-        .from('rooms')
-        .update({
-          status: nextStatus,
-          dealing_phase: nextPhase,
-          current_player_index: firstTrickLeader,
-          first_trick_leader: firstTrickLeader,
-          remaining_cards: null,
-          trump_led_at_start: null,  // Reset for new round
-          card_pull_state: cardPullState as any
-        })
-        .eq('id', roomId)
-    ]);
+    // Update players sequentially
+    for (let i = 0; i < 3; i++) {
+      await supabase
+        .from('players')
+        .update({ hand: hands[i] as any })
+        .eq('room_id', roomId)
+        .eq('position', i);
+    }
+
+    // Transition to next phase (card_pull or playing)
+    await supabase
+      .from('rooms')
+      .update({
+        status: nextStatus,
+        dealing_phase: nextPhase,
+        current_player_index: firstTrickLeader,
+        first_trick_leader: firstTrickLeader,
+        remaining_cards: null,
+        trump_led_at_start: null,  // Reset for new round
+        card_pull_state: cardPullState as any
+      })
+      .eq('id', roomId);
   };
 
   const handlePlayCard = async (card: Card) => {
@@ -299,37 +288,37 @@ const Game = () => {
       const winnerPosition = evaluateTrick(newTrick, gameState.trump_suit);
       const winner = players[winnerPosition];
 
-      // Parallelize all database operations for completed trick
-      await Promise.all([
-        // Update player's hand
-        supabase
-          .from('players')
-          .update({ hand: newHand as any })
-          .eq('room_id', roomId)
-          .eq('position', myPosition),
-        // Update winner's tricks count
-        supabase
-          .from('players')
-          .update({ tricks_won: winner.tricks_won + 1 })
-          .eq('room_id', roomId)
-          .eq('position', winnerPosition),
-        // Save trick to history (trick_number = 10 - cards remaining after this play)
-        supabase.from('tricks').insert({
-          room_id: roomId as string,
-          round_number: gameState.round_number,
-          trick_number: 10 - newHand.length,
-          cards_played: newTrick as any,
-          winner_position: winnerPosition,
-        }),
-        // Update room with completed trick and next player
-        supabase
-          .from('rooms')
-          .update({
-            current_trick: newTrick as any,
-            current_player_index: winnerPosition
-          })
-          .eq('id', roomId)
-      ]);
+      // Update player's hand
+      await supabase
+        .from('players')
+        .update({ hand: newHand as any })
+        .eq('room_id', roomId)
+        .eq('position', myPosition);
+
+      // Update winner's tricks count
+      await supabase
+        .from('players')
+        .update({ tricks_won: winner.tricks_won + 1 })
+        .eq('room_id', roomId)
+        .eq('position', winnerPosition);
+
+      // Save trick to history (trick_number = 10 - cards remaining after this play)
+      await supabase.from('tricks').insert({
+        room_id: roomId as string,
+        round_number: gameState.round_number,
+        trick_number: 10 - newHand.length,
+        cards_played: newTrick as any,
+        winner_position: winnerPosition,
+      });
+
+      // Update room with completed trick and next player
+      await supabase
+        .from('rooms')
+        .update({
+          current_trick: newTrick as any,
+          current_player_index: winnerPosition
+        })
+        .eq('id', roomId);
 
       // Check if round is over (all cards played = hand is empty)
       if (newHand.length === 0) {
@@ -351,7 +340,7 @@ const Game = () => {
         }, 2000);
       }
     } else {
-      // Trick not complete - parallelize hand update and room update
+      // Trick not complete
       // Determine if we need to set trump_led_at_start (first card of first trick)
       const isFirstCardOfFirstTrick = trickIndex === 0 && currentTrick.length === 0;
       const roomUpdate: any = {
@@ -364,17 +353,18 @@ const Game = () => {
         roomUpdate.trump_led_at_start = card.suit === gameState.trump_suit;
       }
 
-      await Promise.all([
-        supabase
-          .from('players')
-          .update({ hand: newHand as any })
-          .eq('room_id', roomId)
-          .eq('position', myPosition),
-        supabase
-          .from('rooms')
-          .update(roomUpdate)
-          .eq('id', roomId)
-      ]);
+      // Update player's hand
+      await supabase
+        .from('players')
+        .update({ hand: newHand as any })
+        .eq('room_id', roomId)
+        .eq('position', myPosition);
+
+      // Update room state
+      await supabase
+        .from('rooms')
+        .update(roomUpdate)
+        .eq('id', roomId);
     }
   };
 
@@ -409,28 +399,26 @@ const Game = () => {
     // Since 5-trick player = (dealer + 1) % 3, new dealer = (dealer + 1) % 3
     const newDealerIndex = (gameState.dealer_index + 1) % 3;
 
-    // Parallelize all score updates and room update
-    await Promise.all([
-      // Update all 3 players' overachievement scores
-      ...updatedPlayers.map(player =>
-        supabase
-          .from('players')
-          .update({ overachievement_score: player.overachievement_score })
-          .eq('room_id', roomId)
-          .eq('position', player.position)
-      ),
-      // Update room state
-      supabase
-        .from('rooms')
-        .update({
-          dealer_index: newDealerIndex,
-          round_number: gameState.round_number + 1,
-          dealing_phase: 'redistribution',
-          status: 'redistribution',
-          previous_round_results: previousRoundResults as any
-        })
-        .eq('id', roomId)
-    ]);
+    // Update all 3 players' overachievement scores sequentially
+    for (const player of updatedPlayers) {
+      await supabase
+        .from('players')
+        .update({ overachievement_score: player.overachievement_score })
+        .eq('room_id', roomId)
+        .eq('position', player.position);
+    }
+
+    // Update room state
+    await supabase
+      .from('rooms')
+      .update({
+        dealer_index: newDealerIndex,
+        round_number: gameState.round_number + 1,
+        dealing_phase: 'redistribution',
+        status: 'redistribution',
+        previous_round_results: previousRoundResults as any
+      })
+      .eq('id', roomId);
   };
 
   // ========== Card Pull Handlers ==========
@@ -593,48 +581,45 @@ const Game = () => {
       }
     }
 
-    // Prepare database updates
-    const dbUpdates: Promise<any>[] = [
-      // Update puller's hand
-      supabase
-        .from('players')
-        .update({ hand: pullerNewHand as any })
-        .eq('room_id', roomId)
-        .eq('position', myPosition),
-      // Update target's hand
-      supabase
-        .from('players')
-        .update({ hand: targetNewHand as any })
-        .eq('room_id', roomId)
-        .eq('position', cardPullState.selectedTarget)
-    ];
+    // Update puller's hand
+    await supabase
+      .from('players')
+      .update({ hand: pullerNewHand as any })
+      .eq('room_id', roomId)
+      .eq('position', myPosition);
+
+    // Update target's hand
+    await supabase
+      .from('players')
+      .update({ hand: targetNewHand as any })
+      .eq('room_id', roomId)
+      .eq('position', cardPullState.selectedTarget);
 
     if (newState) {
       // Continue card pull phase
-      dbUpdates.push(
-        supabase
-          .from('rooms')
-          .update({ card_pull_state: newState as any })
-          .eq('id', roomId)
-      );
+      await supabase
+        .from('rooms')
+        .update({ card_pull_state: newState as any })
+        .eq('id', roomId);
     } else {
       // Transition to playing phase
-      dbUpdates.push(
-        supabase
-          .from('rooms')
-          .update({
-            status: 'playing',
-            dealing_phase: 'playing',
-            card_pull_state: null
-          })
-          .eq('id', roomId)
-      );
+      await supabase
+        .from('rooms')
+        .update({
+          status: 'playing',
+          dealing_phase: 'playing',
+          card_pull_state: null
+        })
+        .eq('id', roomId);
     }
-
-    await Promise.all(dbUpdates);
   };
 
   const handleStartNewRound = async () => {
+    // Guard against double-starting new round
+    if (gameState.status !== 'redistribution') {
+      return;
+    }
+
     setCurrentTrick([]);
     setSelectedTrump(null);
 
@@ -666,33 +651,31 @@ const Game = () => {
     // Store remaining cards (15 cards: 3+2 per player to be dealt after trump selection)
     const remainingCards = deck.slice(15);
 
-    // Parallelize all database updates
-    await Promise.all([
-      // Update all 3 players in parallel
-      ...Array.from({ length: 3 }, (_, i) =>
-        supabase
-          .from('players')
-          .update({
-            hand: firstFiveHands[i] as any,
-            target_tricks: getTargetTricks(i, currentDealerIndex),
-            tricks_won: 0
-          })
-          .eq('room_id', roomId)
-          .eq('position', i)
-      ),
-      // Update room state
-      supabase
-        .from('rooms')
+    // Update players sequentially
+    for (let i = 0; i < 3; i++) {
+      await supabase
+        .from('players')
         .update({
-          dealing_phase: 'trump_selection',
-          status: 'dealing',
-          trump_suit: null,
-          remaining_cards: remainingCards as any,
-          current_trick: [] as any,
-          trump_led_at_start: null  // Reset for new round
+          hand: firstFiveHands[i] as any,
+          target_tricks: getTargetTricks(i, currentDealerIndex),
+          tricks_won: 0
         })
-        .eq('id', roomId)
-    ]);
+        .eq('room_id', roomId)
+        .eq('position', i);
+    }
+
+    // Update room state
+    await supabase
+      .from('rooms')
+      .update({
+        dealing_phase: 'trump_selection',
+        status: 'dealing',
+        trump_suit: null,
+        remaining_cards: remainingCards as any,
+        current_trick: [] as any,
+        trump_led_at_start: null  // Reset for new round
+      })
+      .eq('id', roomId);
   };
 
   if (!gameState) {
@@ -807,13 +790,13 @@ const Game = () => {
           </div>
         )}
 
-        {gameState.dealing_phase === 'dealing_3' && (
+        {gameState.dealing_phase === 'dealing_3' && hand.length < 10 && (
           <div className="text-center py-12 space-y-4">
             <div className="bg-secondary px-6 py-3 rounded-lg border-2 border-primary inline-block mb-4">
               <div className="text-sm font-medium text-muted-foreground mb-1">Trump Suit</div>
               <div className="text-4xl">{gameState.trump_suit}</div>
             </div>
-            <p className="text-lg">3 more cards have been dealt. You now have 8 cards.</p>
+            <p className="text-lg">You now have {hand.length} cards.</p>
             <div className="mb-4">
               <PlayerHand cards={hand} canPlay={false} />
             </div>
