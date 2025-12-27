@@ -790,7 +790,7 @@ const Game = () => {
           </div>
         )}
 
-        {gameState.dealing_phase === 'dealing_3' && hand.length < 10 && (
+        {gameState.dealing_phase === 'dealing_3' && (
           <div className="text-center py-12 space-y-4">
             <div className="bg-secondary px-6 py-3 rounded-lg border-2 border-primary inline-block mb-4">
               <div className="text-sm font-medium text-muted-foreground mb-1">Trump Suit</div>
@@ -800,12 +800,16 @@ const Game = () => {
             <div className="mb-4">
               <PlayerHand cards={hand} canPlay={false} />
             </div>
-            {isDealer ? (
-              <Button onClick={handleDealFinalCards} size="lg">
-                Deal Final 2 Cards
-              </Button>
+            {hand.length < 10 ? (
+              isDealer ? (
+                <Button onClick={handleDealFinalCards} size="lg">
+                  Deal Final 2 Cards
+                </Button>
+              ) : (
+                <p className="text-muted-foreground">Waiting for dealer to deal final 2 cards...</p>
+              )
             ) : (
-              <p className="text-muted-foreground">Waiting for dealer to deal final 2 cards...</p>
+              <p className="text-muted-foreground">Starting game...</p>
             )}
           </div>
         )}
