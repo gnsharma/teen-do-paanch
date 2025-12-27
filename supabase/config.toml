@@ -1,1 +1,9 @@
-project_id = "gfdhlciebxchztnjyqsb"
+# Supabase Configuration
+# See: https://supabase.com/docs/guides/cli/config
+
+project_id = "qdykjmeojrojahukorbp"
+
+[api]
+# Expose the 'api' schema instead of 'public'
+schemas = ["api"]
+
